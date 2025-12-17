@@ -61,19 +61,30 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $email = $_POST['email'];
     $password_input = $_POST['password'];
 
-    $sql = "SELECT id, first_name, password FROM users WHERE email=?";
+    $sql = "SELECT id, first_name, last_name, password, role FROM users WHERE email=?";
     $stmt = $conn->prepare($sql);
     $stmt->bind_param("s", $email);
     $stmt->execute();
     $stmt->store_result();
 
     if ($stmt->num_rows > 0) {
-        $stmt->bind_result($id, $first_name, $hashed_password);
+        $stmt->bind_result($id, $first_name, $last_name, $hashed_password, $role);
         $stmt->fetch();
+
         if (password_verify($password_input, $hashed_password)) {
+            
             $_SESSION['user_id'] = $id;
             $_SESSION['first_name'] = $first_name;
-            header("Location: patient_dashboard.php");
+            $_SESSION['last_name'] = $last_name;
+            $_SESSION['role'] = $role;
+
+            if ($role == 'admin') {
+                header("Location: admin_dashboard.php");
+            } elseif ($role == 'provider') {
+                header("Location: provider_dashboard.php");
+            } else {
+                header("Location: patient_dashboard.php");
+            }
             exit();
         } else {
             $error = "Incorrect password.";
@@ -81,8 +92,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     } else {
         $error = "No account found with that email.";
     }
+
     $stmt->close();
 }
+
 $conn->close();
 ?>
 
@@ -103,7 +116,113 @@ $conn->close();
 
 <?php
 session_start();
-if (!isset($_SESSION['user_id'])) header("Location: login.php");
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit();
+}
+
+$servername = "localhost";
+$username = "root";
+$password = "root";
+$dbname = "patient_tracker_system";
+$port = 8889; 
+
+$conn = new mysqli($servername, $username, $password, $dbname, $port);
+
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+$user_id = $_SESSION['user_id'];
+
+$section = isset($_GET['section']) ? $_GET['section'] : 'view';
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Appointments</title>
+    <style>
+        body { font-family: Arial; padding: 30px; background: #f4f4f4; }
+        h2 { color: #333; }
+        .button { padding: 10px 20px; margin: 5px; background: #4CAF50; color: white; text-decoration: none; border-radius: 5px; }
+        .button:hover { background: #45a049; }
+        form input, form textarea { display:block; margin: 10px 0; padding: 8px; width: 300px; }
+        table { border-collapse: collapse; width: 80%; margin-top: 20px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+    </style>
+</head>
+<body>
+
+<h1>Appointments</h1>
+
+<a class="button" href="appointments.php?section=view">View Existing Appointments</a>
+<a class="button" href="appointments.php?section=schedule">Schedule New Appointment</a>
+
+<hr>
+
+<?php if($section == 'view'): ?>
+    <h2>Your Appointments</h2>
+    <?php
+    $sql = "SELECT appointment_date, appointment_time, reason FROM appointments WHERE patient_id=? ORDER BY appointment_date DESC";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    ?>
+    <table>
+        <tr><th>Date</th><th>Time</th><th>Reason</th></tr>
+        <?php while($row = $result->fetch_assoc()): ?>
+        <tr>
+            <td><?php echo htmlspecialchars($row['appointment_date']); ?></td>
+            <td><?php echo htmlspecialchars($row['appointment_time']); ?></td>
+            <td><?php echo htmlspecialchars($row['reason']); ?></td>
+        </tr>
+        <?php endwhile; ?>
+    </table>
+
+<?php elseif($section == 'schedule'): ?>
+    <h2>Schedule a New Appointment</h2>
+    <form action="appointments.php?section=schedule" method="post">
+        <label>Date:</label>
+        <input type="date" name="appointment_date" required>
+        <label>Time:</label>
+        <input type="time" name="appointment_time" required>
+        <label>Reason:</label>
+        <textarea name="reason" rows="4" required></textarea>
+        <input type="submit" value="Schedule Appointment">
+    </form>
+
+    <?php
+    if($_SERVER["REQUEST_METHOD"] == "POST") {
+        $date = $_POST['appointment_date'];
+        $time = $_POST['appointment_time'];
+        $reason = $_POST['reason'];
+
+        $sql = "INSERT INTO appointments (patient_id, appointment_date, appointment_time, reason) VALUES (?, ?, ?, ?)";
+        $stmt = $conn->prepare($sql);
+        $stmt->bind_param("isss", $user_id, $date, $time, $reason);
+
+        if($stmt->execute()){
+            echo "<p style='color:green;'>Appointment scheduled successfully!</p>";
+        } else {
+            echo "<p style='color:red;'>Error: ".$stmt->error."</p>";
+        }
+    }
+    ?>
+<?php endif; ?>
+
+<p><a href="patient_dashboard.php">Back to Dashboard</a></p>
+
+</body>
+</html>
+
+<?php
+session_start();
+if(!isset($_SESSION['user_id']) || $_SESSION['role'] != 'patient'){
+    header("Location: login.php");
+    exit();
+}
 ?>
 
 <!DOCTYPE html>
@@ -121,43 +240,12 @@ h1 { color: #333; }
 
 <h1>Welcome, <?php echo $_SESSION['first_name']; ?>!</h1>
 
-<a class="button" href="view_appointments.php">View Appointments</a>
-<a class="button" href="add_appointment.html">Schedule Appointment</a>
-<a class="button" href="view_medical_records.php">View Medical Records</a>
-
-</body>
-</html>
-
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Schedule Appointment</title>
-    <style>
-        body { font-family: Arial; text-align: center; padding: 50px; background-color: #f4f4f4; }
-        form { display: inline-block; background: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-        input, textarea { width: 100%; padding: 10px; margin: 10px 0; border-radius: 5px; border: 1px solid #ccc; }
-        input[type="submit"] { background-color: #4CAF50; color: white; border: none; cursor: pointer; }
-        input[type="submit"]:hover { background-color: #45a049; }
-    </style>
-</head>
-<body>
-
-<h2>Schedule a New Appointment</h2>
-
-<form action="add_appointment.php" method="post">
-    <label for="appointment_date">Date:</label><br>
-    <input type="date" id="appointment_date" name="appointment_date" required><br>
-
-    <label for="appointment_time">Time:</label><br>
-    <input type="time" id="appointment_time" name="appointment_time" required><br>
-
-    <label for="reason">Reason for Appointment:</label><br>
-    <textarea id="reason" name="reason" rows="4" required></textarea><br>
-
-    <input type="submit" value="Schedule Appointment">
-</form>
-
-<p><a href="patient_dashboard.php">Back to Dashboard</a></p>
+<a class="button" href="appointments.php">Appointments</a>
+<a class="button" href="view_medical_records.php">Medical Records</a>
+<a class="button" href="request_refill.php">Request Prescription Refill</a>
+<a class="button" href="messages.php">Messages</a>
+<br><br>
+<a class="button" href="logout.php">Logout</a>
 
 </body>
 </html>
@@ -193,6 +281,134 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 }
 $conn->close();
 ?>
+
+<?php
+session_start();
+if(!isset($_SESSION['user_id'])){
+    header("Location: login.php");
+    exit();
+}
+
+$servername = "localhost";
+$username = "root";
+$password = "root";
+$dbname = "patient_tracker_system";
+$port = 8889;
+
+$conn = new mysqli($servername, $username, $password, $dbname, $port);
+if($conn->connect_error) die("Connection failed: " . $conn->connect_error);
+
+$user_id = $_SESSION['user_id'];
+
+if($_SERVER["REQUEST_METHOD"] == "POST"){
+    $message = $_POST['message'];
+    $sql = "INSERT INTO messages (patient_id, message, sent_by_patient, date_sent) VALUES (?, ?, 1, NOW())";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("is", $user_id, $message);
+    $stmt->execute();
+}
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+<title>Patient Messages</title>
+<style>
+body { font-family: Arial; padding: 30px; background: #f4f4f4; }
+form textarea { width: 400px; height: 80px; padding: 8px; margin: 10px 0; }
+.button { padding:10px 20px; margin:5px; background:#4CAF50; color:white; border-radius:5px; text-decoration:none; }
+.message { background:#fff; padding:10px; margin:5px 0; border-radius:5px; border:1px solid #ccc; }
+</style>
+</head>
+<body>
+
+<h1>Message Provider</h1>
+
+<form method="post" action="">
+    <textarea name="message" placeholder="Type your message..." required></textarea>
+    <input class="button" type="submit" value="Send Message">
+</form>
+
+<h2>Previous Messages</h2>
+<?php
+$sql = "SELECT message, date_sent, sent_by_patient FROM messages WHERE patient_id=? ORDER BY date_sent DESC";
+$stmt = $conn->prepare($sql);
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$result = $stmt->get_result();
+while($row = $result->fetch_assoc()){
+    $who = $row['sent_by_patient'] ? "You" : "Provider";
+    echo "<div class='message'><strong>$who:</strong> " . htmlspecialchars($row['message']) . "<br><small>" . $row['date_sent'] . "</small></div>";
+}
+?>
+
+<br>
+<p><a href="patient_dashboard.php">Back to Dashboard</a></p>
+
+</body>
+</html>
+
+<?php
+session_start();
+if(!isset($_SESSION['user_id']) || $_SESSION['role'] != 'patient'){
+    header("Location: login.php");
+    exit();
+}
+
+$conn = new mysqli("localhost", "root", "root", "patient_tracker_system", 8889);
+if($conn->connect_error) die("Connection failed: " . $conn->connect_error);
+
+$patient_id = $_SESSION['user_id'];
+
+$sql = "SELECT date, diagnosis, treatment_plan, notes 
+        FROM medical_records 
+        WHERE patient_id=? 
+        ORDER BY date DESC";
+$stmt = $conn->prepare($sql);
+$stmt->bind_param("i", $patient_id);
+$stmt->execute();
+$result = $stmt->get_result();
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Your Medical Records</title>
+    <style>
+        body { font-family: Arial; padding: 30px; background: #f4f4f4; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        a { display: block; margin-top: 20px; text-decoration: none; color: #333; }
+    </style>
+</head>
+<body>
+
+<h2>Your Medical Records</h2>
+
+<table>
+<tr>
+    <th>Date</th>
+    <th>Diagnosis</th>
+    <th>Treatment Plan</th>
+    <th>Notes</th>
+</tr>
+
+<?php while($row = $result->fetch_assoc()): ?>
+<tr>
+    <td><?php echo htmlspecialchars($row['date']); ?></td>
+    <td><?php echo htmlspecialchars($row['diagnosis']); ?></td>
+    <td><?php echo htmlspecialchars($row['treatment_plan']); ?></td>
+    <td><?php echo htmlspecialchars($row['notes']); ?></td>
+</tr>
+<?php endwhile; ?>
+</table>
+
+<a href="patient_dashboard.php">Back to Dashboard</a>
+
+</body>
+</html>
+
+<?php $conn->close(); ?>
 
 <?php
 session_start();
@@ -236,7 +452,116 @@ $result = $stmt->get_result();
 
 <?php
 session_start();
-if (!isset($_SESSION['user_id'])) header("Location: login.php");
+if(!isset($_SESSION['user_id'])){
+    header("Location: login.php");
+    exit();
+}
+
+$servername = "localhost";
+$username = "root";
+$password = "root";
+$dbname = "patient_tracker_system";
+$port = 8889;
+
+$conn = new mysqli($servername, $username, $password, $dbname, $port);
+if($conn->connect_error) die("Connection failed: " . $conn->connect_error);
+
+$user_id = $_SESSION['user_id'];
+
+if($_SERVER["REQUEST_METHOD"] == "POST"){
+    $prescription_name = $_POST['prescription_name'];
+    $notes = $_POST['notes'];
+
+    $sql = "INSERT INTO refill_requests (patient_id, prescription_name, notes, status) VALUES (?, ?, ?, 'Pending')";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("iss", $user_id, $prescription_name, $notes);
+    
+    if($stmt->execute()){
+        $message = "Refill request submitted successfully!";
+    } else {
+        $message = "Error: " . $stmt->error;
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+<title>Request Refill</title>
+<style>
+body { font-family: Arial; padding: 30px; background: #f4f4f4; }
+form input, form textarea { display:block; margin:10px 0; padding:8px; width:300px; }
+.button { padding:10px 20px; margin-top:10px; background:#4CAF50; color:white; text-decoration:none; border-radius:5px; }
+</style>
+</head>
+<body>
+
+<h1>Request Prescription Refill</h1>
+
+<?php if(isset($message)) echo "<p>$message</p>"; ?>
+
+<form method="post" action="">
+    <label>Prescription Name:</label>
+    <input type="text" name="prescription_name" required>
+    <label>Notes (optional):</label>
+    <textarea name="notes" rows="3"></textarea>
+    <input class="button" type="submit" value="Submit Request">
+</form>
+
+<br>
+<p><a href="patient_dashboard.php">Back to Dashboard</a></p>
+
+</body>
+</html>
+
+<?php
+session_start();
+
+session_unset();
+session_destroy();
+
+header("Location: login.php");
+exit();
+?>
+
+<?php
+session_start();
+
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'provider') {
+    die("Access denied.");
+}
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Provider Dashboard</title>
+    <style>
+        body { font-family: Arial; text-align: center; padding: 50px; background-color: #f4f4f4; }
+        h1 { color: #333; }
+        .button { display: inline-block; margin: 15px; padding: 20px 40px; font-size: 18px; background-color: #4CAF50; color: white; text-decoration: none; border-radius: 8px; }
+        .button:hover { background-color: #45a049; }
+    </style>
+</head>
+<body>
+
+<h1>Welcome, <?php echo $_SESSION['first_name'] . ' ' . $_SESSION['last_name']; ?>!</h1>
+
+<a class="button" href="provider_appointments.php">Appointments</a>
+<a class="button" href="provider_medical_records.php">Medical Records</a>
+<a class="button" href="provider_prescriptions.php">Refill Requests</a>
+<a class="button" href="provider_messages.php">Messages</a>
+<a class="button" href="logout.php">Logout</a>
+
+</body>
+</html>
+
+<?php
+session_start();
+
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] != 'provider') {
+    die("Access denied.");
+}
 
 $servername = "localhost";
 $username = "root";
@@ -247,30 +572,587 @@ $port = 8889;
 $conn = new mysqli($servername, $username, $password, $dbname, $port);
 if ($conn->connect_error) die("Connection failed: " . $conn->connect_error);
 
-$patient_id = $_SESSION['user_id'];
-$sql = "SELECT date, diagnosis, treatment_plan, notes FROM medical_records WHERE patient_id=? ORDER BY date DESC";
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['appointment_id']) && isset($_POST['status'])) {
+    $appointment_id = $_POST['appointment_id'];
+    $status = $_POST['status'];
+
+    $stmt = $conn->prepare("UPDATE appointments SET status=? WHERE id=?");
+    $stmt->bind_param("si", $status, $appointment_id);
+    $stmt->execute();
+    $stmt->close();
+}
+
+$filter_patient = $_GET['patient'] ?? '';
+$filter_date = $_GET['date'] ?? '';
+
+$sql = "SELECT a.id, a.appointment_date, a.appointment_time, a.reason, a.status, u.first_name, u.last_name
+        FROM appointments a
+        JOIN users u ON a.patient_id = u.id
+        WHERE 1=1";
+
+$params = [];
+$types = "";
+
+if ($filter_patient) {
+    $sql .= " AND CONCAT(u.first_name, ' ', u.last_name) LIKE ?";
+    $filter_patient_param = "%$filter_patient%";
+    $params[] = &$filter_patient_param;
+    $types .= "s";
+}
+
+if ($filter_date) {
+    $sql .= " AND a.appointment_date = ?";
+    $params[] = &$filter_date;
+    $types .= "s";
+}
+
+$sql .= " ORDER BY a.appointment_date DESC";
+
 $stmt = $conn->prepare($sql);
-$stmt->bind_param("i", $patient_id);
+
+if (!empty($params)) {
+    array_unshift($params, $types);
+    call_user_func_array([$stmt, 'bind_param'], $params);
+}
+
 $stmt->execute();
 $result = $stmt->get_result();
 ?>
 
 <!DOCTYPE html>
 <html>
-<head><title>Medical Records</title></head>
+<head>
+    <title>Provider Appointments</title>
+    <style>
+        body { font-family: Arial; padding: 30px; background-color: #f4f4f4; }
+        table { border-collapse: collapse; width: 100%; background: #fff; }
+        th, td { padding: 10px; border: 1px solid #ccc; text-align: left; }
+        th { background-color: #4CAF50; color: white; }
+        form.inline { display: inline; }
+        input[type="text"], input[type="date"], select { padding: 5px; margin: 5px; }
+        input[type="submit"] { padding: 5px 10px; margin: 5px; }
+    </style>
+</head>
 <body>
-<h2>Your Medical Records</h2>
-<table border="1" cellpadding="5" cellspacing="0">
-<tr><th>Date</th><th>Diagnosis</th><th>Treatment Plan</th><th>Notes</th></tr>
+
+<h2>Appointments</h2>
+
+<table>
+<tr>
+    <th>Date</th>
+    <th>Time</th>
+    <th>Patient</th>
+    <th>Reason</th>
+    <th>Status</th>
+    <th>Update Status</th>
+</tr>
+
+<?php while ($row = $result->fetch_assoc()): ?>
+<tr>
+    <td><?php echo $row['appointment_date']; ?></td>
+    <td><?php echo $row['appointment_time']; ?></td>
+    <td><?php echo $row['first_name'] . ' ' . $row['last_name']; ?></td>
+    <td><?php echo $row['reason']; ?></td>
+    <td><?php echo $row['status']; ?></td>
+    <td>
+        <form method="post" class="inline">
+            <input type="hidden" name="appointment_id" value="<?php echo $row['id']; ?>">
+            <select name="status">
+                <option value="Pending" <?php if($row['status']=='Pending') echo 'selected'; ?>>Pending</option>
+                <option value="Confirmed" <?php if($row['status']=='Confirmed') echo 'selected'; ?>>Accept</option>
+                <option value="Completed" <?php if($row['status']=='Completed') echo 'selected'; ?>>Deny</option>
+            </select>
+            <input type="submit" value="Update">
+        </form>
+    </td>
+</tr>
+<?php endwhile; ?>
+
+</table>
+
+<p><a href="provider_dashboard.php">Back to Dashboard</a></p>
+
+</body>
+</html>
+
+<?php
+$stmt->close();
+$conn->close();
+?>
+
+<?php
+session_start();
+if(!isset($_SESSION['user_id']) || $_SESSION['role'] != 'provider'){
+    header("Location: login.php");
+    exit();
+}
+
+$conn = new mysqli("localhost", "root", "root", "patient_tracker_system", 8889);
+if($conn->connect_error) die("Connection failed: " . $conn->connect_error);
+
+$patient_id = $_GET['patient_id'] ?? '';
+
+$sql = "SELECT mr.date, mr.diagnosis, mr.treatment_plan, mr.notes, u.first_name, u.last_name
+        FROM medical_records mr
+        JOIN users u ON mr.patient_id = u.id
+        WHERE 1";
+
+$params = [];
+$types = '';
+if($patient_id){
+    $sql .= " AND mr.patient_id = ?";
+    $types .= "i";
+    $params[] = $patient_id;
+}
+
+$sql .= " ORDER BY mr.date DESC";
+
+$stmt = $conn->prepare($sql);
+if($params){
+    $stmt->bind_param($types, ...$params);
+}
+$stmt->execute();
+$result = $stmt->get_result();
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Patient Medical Records</title>
+    <style>
+        body { font-family: Arial; padding: 30px; background: #f4f4f4; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        a { display: block; margin-top: 20px; text-decoration: none; color: #333; }
+        form { margin-bottom: 20px; }
+        input[type="number"] { padding: 5px; width: 100px; }
+        input[type="submit"] { padding: 5px 10px; }
+    </style>
+</head>
+<body>
+
+<h2>Patient Medical Records</h2>
+
+<table>
+<tr>
+    <th>Patient Name</th>
+    <th>Date</th>
+    <th>Diagnosis</th>
+    <th>Treatment Plan</th>
+    <th>Notes</th>
+</tr>
+
 <?php while($row = $result->fetch_assoc()): ?>
 <tr>
-<td><?php echo $row['date']; ?></td>
-<td><?php echo $row['diagnosis']; ?></td>
-<td><?php echo $row['treatment_plan']; ?></td>
-<td><?php echo $row['notes']; ?></td>
+    <td><?php echo htmlspecialchars($row['first_name'].' '.$row['last_name']); ?></td>
+    <td><?php echo htmlspecialchars($row['date']); ?></td>
+    <td><?php echo htmlspecialchars($row['diagnosis']); ?></td>
+    <td><?php echo htmlspecialchars($row['treatment_plan']); ?></td>
+    <td><?php echo htmlspecialchars($row['notes']); ?></td>
 </tr>
 <?php endwhile; ?>
 </table>
-<p><a href="patient_dashboard.php">Back to Dashboard</a></p>
+
+<a href="provider_dashboard.php">Back to Dashboard</a>
+
 </body>
 </html>
+
+<?php $conn->close(); ?>
+
+<?php
+session_start();
+if(!isset($_SESSION['user_id']) || $_SESSION['role'] != 'provider'){
+    header("Location: login.php");
+    exit();
+}
+
+$servername = "localhost";
+$username = "root";
+$password = "root";
+$dbname = "patient_tracker_system";
+$port = 8889;
+
+$conn = new mysqli($servername, $username, $password, $dbname, $port);
+if($conn->connect_error) die("Connection failed: " . $conn->connect_error);
+
+if(isset($_POST['update_status'])){
+    $request_id = $_POST['request_id'];
+    $new_status = $_POST['status'];
+    $stmt = $conn->prepare("UPDATE refill_requests SET status=? WHERE id=?");
+    $stmt->bind_param("si", $new_status, $request_id);
+    $stmt->execute();
+    $stmt->close();
+}
+
+$filter_patient = $_GET['patient_id'] ?? '';
+
+$sql = "SELECT rr.id, rr.patient_id, rr.prescription_name, rr.notes, rr.status, rr.date_requested, u.first_name, u.last_name
+        FROM refill_requests rr
+        JOIN users u ON rr.patient_id = u.id
+        WHERE 1";
+
+$params = [];
+$types = '';
+if($filter_patient){
+    $sql .= " AND rr.patient_id = ?";
+    $types .= 'i';
+    $params[] = $filter_patient;
+}
+
+$stmt = $conn->prepare($sql);
+if($params){
+    $stmt->bind_param($types, ...$params);
+}
+$stmt->execute();
+$result = $stmt->get_result();
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Provider Prescription Requests</title>
+    <style>
+        body { font-family: Arial; padding: 30px; background: #f4f4f4; }
+        table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        select { padding: 5px; margin: 5px; }
+        .button { padding: 5px 10px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .button:hover { background: #45a049; }
+        .back { background: #f44336; }
+    </style>
+</head>
+<body>
+
+<h1>Prescription Refill Requests</h1>
+
+<table>
+<tr>
+    <th>Patient Name</th>
+    <th>Prescription</th>
+    <th>Notes</th>
+    <th>Date Requested</th>
+    <th>Status</th>
+    <th>Update Status</th>
+</tr>
+
+<?php while($row = $result->fetch_assoc()): ?>
+<tr>
+    <form method="post" action="">
+        <td><?php echo htmlspecialchars($row['first_name'].' '.$row['last_name']); ?></td>
+        <td><?php echo htmlspecialchars($row['prescription_name']); ?></td>
+        <td><?php echo htmlspecialchars($row['notes']); ?></td>
+        <td><?php echo htmlspecialchars($row['date_requested']); ?></td>
+        <td><?php echo htmlspecialchars($row['status']); ?></td>
+        <td>
+            <input type="hidden" name="request_id" value="<?php echo $row['id']; ?>">
+            <select name="status">
+                <option value="Pending" <?php if($row['status']=='Pending') echo 'selected'; ?>>Pending</option>
+                <option value="Approved" <?php if($row['status']=='Approved') echo 'selected'; ?>>Approved</option>
+                <option value="Denied" <?php if($row['status']=='Denied') echo 'selected'; ?>>Denied</option>
+            </select>
+            <input type="submit" name="update_status" class="button" value="Update">
+        </td>
+    </form>
+</tr>
+<?php endwhile; ?>
+
+</table>
+
+<p><a href="provider_dashboard.php">Back to Dashboard</a></p>
+</body>
+</html>
+
+<?php
+session_start();
+if(!isset($_SESSION['user_id']) || $_SESSION['role'] != 'provider'){
+    header("Location: login.php");
+    exit();
+}
+
+$conn = new mysqli("localhost", "root", "root", "patient_tracker_system", 8889);
+if($conn->connect_error) die("Connection failed: " . $conn->connect_error);
+
+if(isset($_POST['send_reply'])){
+    $patient_name = trim($_POST['patient_name']);
+    $message = $_POST['message'];
+
+    $parts = explode(' ', $patient_name, 2);
+    $first_name = $parts[0];
+    $last_name = $parts[1] ?? '';
+
+    $stmt = $conn->prepare("SELECT id FROM users WHERE first_name=? AND last_name=? AND role='patient'");
+    $stmt->bind_param("ss", $first_name, $last_name);
+    $stmt->execute();
+    $stmt->bind_result($patient_id);
+    $stmt->fetch();
+    $stmt->close();
+
+    if($patient_id){
+        
+        $sent_by_patient = 0; // provider sends
+        $stmt = $conn->prepare("INSERT INTO messages (patient_id, message, sent_by_patient, date_sent) VALUES (?, ?, ?, NOW())");
+        $stmt->bind_param("isi", $patient_id, $message, $sent_by_patient);
+        $stmt->execute();
+        $stmt->close();
+        $feedback = "Message sent to $patient_name.";
+    } else {
+        $feedback = "Patient not found.";
+    }
+}
+
+$sql = "SELECT m.id, m.patient_id, m.message, m.sent_by_patient, m.date_sent, u.first_name, u.last_name
+        FROM messages m
+        JOIN users u ON m.patient_id = u.id
+        ORDER BY m.date_sent DESC";
+$result = $conn->query($sql);
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Provider Messages</title>
+    <style>
+        body { font-family: Arial; padding: 30px; background: #f4f4f4; }
+        .message-box { background: #fff; padding: 15px; margin-bottom: 15px; border-radius: 8px; }
+        input, textarea { padding: 5px; margin: 5px 0; width: 100%; }
+        .button { padding: 5px 10px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .button:hover { background: #45a049; }
+    </style>
+</head>
+<body>
+
+<h1>Patient Messages</h1>
+
+<?php while($row = $result->fetch_assoc()): ?>
+<div class="message-box">
+    <strong>From: <?= htmlspecialchars($row['first_name'].' '.$row['last_name']); ?></strong>
+    <p><?= htmlspecialchars($row['message']); ?></p>
+    <small><?= $row['sent_by_patient'] ? 'Patient' : 'Provider'; ?> | <?= $row['date_sent']; ?></small>
+</div>
+<?php endwhile; ?>
+
+<h2>Send a Reply</h2>
+<?php if(isset($feedback)) echo "<p><strong>$feedback</strong></p>"; ?>
+<form method="post" action="">
+    Patient Name (First Last): <input type="text" name="patient_name" required><br>
+    Message: <textarea name="message" rows="4" required></textarea><br>
+    <input type="submit" name="send_reply" class="button" value="Send Reply">
+</form>
+
+<p><a href="provider_dashboard.php">Back to Dashboard</a></p>
+
+</body>
+</html>
+
+<?php $conn->close(); ?>
+
+<?php
+session_start();
+if(!isset($_SESSION['user_id']) || $_SESSION['role'] != 'admin'){
+    header("Location: login.php");
+    exit();
+}
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Admin Dashboard</title>
+    <style>
+        body { font-family: Arial; text-align: center; padding: 50px; background-color: #f4f4f4; }
+        h1 { color: #333; }
+        .button {
+            display: block;
+            margin: 20px auto;
+            padding: 20px 40px;
+            font-size: 18px;
+            background-color: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            width: 250px;
+        }
+        .button:hover { background-color: #45a049; }
+        .logout { background-color: #f44336; }
+        .logout:hover { background-color: #da190b; }
+    </style>
+</head>
+<body>
+
+<h1>Welcome, Admin!</h1>
+
+<a class="button" href="admin_schedule_appointment.php">Schedule New Appointment</a>
+<a class="button" href="admin_view_appointments.php">View Appointments</a>
+<a class="button logout" href="logout.php">Logout</a>
+
+</body>
+</html>
+
+<?php
+session_start();
+if(!isset($_SESSION['user_id']) || $_SESSION['role'] != 'admin'){
+    header("Location: login.php");
+    exit();
+}
+
+$conn = new mysqli("localhost", "root", "root", "patient_tracker_system", 8889);
+if($conn->connect_error) die("Connection failed: " . $conn->connect_error);
+
+if(isset($_POST['cancel_appointment'])){
+    $appt_id = $_POST['appointment_id'];
+    $stmt = $conn->prepare("DELETE FROM appointments WHERE id=?");
+    $stmt->bind_param("i", $appt_id);
+    $stmt->execute();
+    $stmt->close();
+}
+
+if(isset($_POST['reschedule_appointment'])){
+    $appt_id = $_POST['appointment_id'];
+    $new_date = $_POST['new_date'];
+    $new_time = $_POST['new_time'];
+    $stmt = $conn->prepare("UPDATE appointments SET appointment_date=?, appointment_time=? WHERE id=?");
+    $stmt->bind_param("ssi", $new_date, $new_time, $appt_id);
+    $stmt->execute();
+    $stmt->close();
+}
+
+$sql = "SELECT a.id, a.appointment_date, a.appointment_time, a.reason, 
+               u.first_name, u.last_name
+        FROM appointments a
+        JOIN users u ON a.patient_id = u.id
+        ORDER BY a.appointment_date DESC, a.appointment_time DESC";
+$result = $conn->query($sql);
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>View Appointments</title>
+    <style>
+        body { font-family: Arial; padding: 30px; background: #f4f4f4; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 30px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        input { padding: 5px; margin: 5px 0; }
+        .button { padding: 5px 10px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        .button:hover { background: #45a049; }
+        form { display: inline; }
+        a { display: inline-block; margin-top: 20px; text-decoration: none; color: #333; }
+    </style>
+</head>
+<body>
+
+<h2>Appointment Schedule</h2>
+
+<table>
+    <tr>
+        <th>Patient</th>
+        <th>Date</th>
+        <th>Time</th>
+        <th>Reason</th>
+        <th>Actions</th>
+    </tr>
+    <?php while($row = $result->fetch_assoc()): ?>
+    <tr>
+        <td><?= htmlspecialchars($row['first_name'].' '.$row['last_name']); ?></td>
+        <td><?= $row['appointment_date']; ?></td>
+        <td><?= $row['appointment_time']; ?></td>
+        <td><?= htmlspecialchars($row['reason']); ?></td>
+        <td>
+            
+            <form method="post">
+                <input type="hidden" name="appointment_id" value="<?= $row['id']; ?>">
+                <input type="submit" name="cancel_appointment" class="button" value="Cancel">
+            </form>
+            
+            <br>
+            <form method="post">
+                <input type="hidden" name="appointment_id" value="<?= $row['id']; ?>">
+                Date: <input type="date" name="new_date" required>
+                Time: <input type="time" name="new_time" required>
+                <input type="submit" name="reschedule_appointment" class="button" value="Reschedule">
+            </form>
+        </td>
+    </tr>
+    <?php endwhile; ?>
+</table>
+
+<a href="admin_dashboard.php">Back to Dashboard</a>
+
+</body>
+</html>
+
+<?php $conn->close(); ?>
+
+<?php
+session_start();
+if(!isset($_SESSION['user_id']) || $_SESSION['role'] != 'admin'){
+    header("Location: login.php");
+    exit();
+}
+
+$conn = new mysqli("localhost", "root", "root", "patient_tracker_system", 8889);
+if($conn->connect_error) die("Connection failed: " . $conn->connect_error);
+
+if(isset($_POST['schedule_appointment'])){
+    $patient_name = trim($_POST['patient_name']);
+    $date = $_POST['appointment_date'];
+    $time = $_POST['appointment_time'];
+    $reason = $_POST['reason'];
+
+    $p = explode(' ', $patient_name, 2);
+    $first_name = $p[0]; 
+    $last_name = $p[1] ?? '';
+
+    $stmt = $conn->prepare("SELECT id FROM users WHERE first_name=? AND last_name=? AND role='patient'");
+    $stmt->bind_param("ss", $first_name, $last_name);
+    $stmt->execute();
+    $stmt->bind_result($patient_id);
+    $stmt->fetch();
+    $stmt->close();
+
+    if($patient_id){
+        $stmt = $conn->prepare("INSERT INTO appointments (patient_id, appointment_date, appointment_time, reason) VALUES (?, ?, ?, ?)");
+        $stmt->bind_param("isss", $patient_id, $date, $time, $reason);
+        $stmt->execute();
+        $stmt->close();
+        $feedback = "Appointment scheduled successfully.";
+    } else {
+        $feedback = "Patient not found.";
+    }
+}
+?>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Schedule Appointment</title>
+    <style>
+        body { font-family: Arial; padding: 30px; background: #f4f4f4; text-align: center; }
+        form { display: inline-block; background: #fff; padding: 30px; border-radius: 10px; }
+        input { padding: 10px; margin: 10px 0; width: 100%; }
+        .button { padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        .button:hover { background: #45a049; }
+        a { display: block; margin-top: 20px; text-decoration: none; color: #333; }
+    </style>
+</head>
+<body>
+
+<h2>Schedule a New Appointment</h2>
+
+<?php if(isset($feedback)) echo "<p><strong>$feedback</strong></p>"; ?>
+
+<form method="post" action="">
+    Patient Name (First Last): <input type="text" name="patient_name" required><br>
+    Date: <input type="date" name="appointment_date" required><br>
+    Time: <input type="time" name="appointment_time" required><br>
+    Reason: <input type="text" name="reason" required><br>
+    <input type="submit" name="schedule_appointment" class="button" value="Schedule Appointment">
+</form>
+
+<a href="admin_dashboard.php">Back to Dashboard</a>
+
+</body>
+</html>
+
+<?php $conn->close(); ?>
